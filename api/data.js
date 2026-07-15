@@ -87,6 +87,8 @@ function fetchCSVFromUrl(url, timeoutMs) {
 
 async function fetchAiAccuracy() {
   const raw = await fetchCSVFromUrl(AI_ACCURACY_CSV_URL, 7000);
+  console.log('[ai_accuracy][debug] raw fetch length=' + raw.length +
+    ' firstLine=' + JSON.stringify((raw.split('\n')[0] || '').slice(0, 200)));
   if (!raw) return { byKey: {}, byEnt: {} };
   try {
     return parseAiAccuracyCSV(raw);
@@ -934,6 +936,12 @@ module.exports = async function handler(req, res) {
       return res.status(500).json({ error: 'All sheet fetches failed', details: errors });
 
     const payload = { months, errors, enterpriseMeta, fetchedAt: new Date().toISOString() };
+    payload._aiAccuracyDebug = {
+      keyCount: Object.keys(aiAccuracyIndex || {}).length,
+      sampleKeys: Object.keys(aiAccuracyIndex || {}).slice(0, 5),
+    };
+    console.log('[ai_accuracy][debug] keyCount=' + payload._aiAccuracyDebug.keyCount +
+      ' sampleKeys=' + JSON.stringify(payload._aiAccuracyDebug.sampleKeys));
 
     // Store in both caches
     _memCache = { data: payload, ts: Date.now() };
