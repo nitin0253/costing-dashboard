@@ -86,7 +86,7 @@ function fetchCSVFromUrl(url, timeoutMs) {
 }
 
 async function fetchAiAccuracy() {
-  const raw = await fetchCSVFromUrl(AI_ACCURACY_CSV_URL, 5000);
+  const raw = await fetchCSVFromUrl(AI_ACCURACY_CSV_URL, 7000);
   if (!raw) return { byKey: {}, byEnt: {} };
   try {
     return parseAiAccuracyCSV(raw);
@@ -909,8 +909,8 @@ module.exports = async function handler(req, res) {
     const rawSheetsData = [...frozenData, ...activeData];
 
     // Metabase: run in parallel with active sheet fetches (already done above)
-    const metaDeadline  = new Promise(resolve => setTimeout(() => resolve({}), 5000));
-    const aiAccDeadline = new Promise(resolve => setTimeout(() => resolve({ byKey: {}, byEnt: {} }), 5000));
+    const metaDeadline  = new Promise(resolve => setTimeout(() => resolve({}), 8000));
+    const aiAccDeadline = new Promise(resolve => setTimeout(() => resolve({ byKey: {}, byEnt: {} }), 8000));
     const [enterpriseMeta, { byKey: aiAccuracyIndex }] = await Promise.all([
       Promise.race([fetchMetabaseCSV(), metaDeadline]),
       Promise.race([fetchAiAccuracy(), aiAccDeadline]),
