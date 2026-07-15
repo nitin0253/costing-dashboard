@@ -70,15 +70,15 @@ function fetchCSVFromUrl(url, timeoutMs) {
     }, (res) => {
       if (res.statusCode === 301 || res.statusCode === 302) {
         https.get(res.headers.location, { timeout: timeoutMs }, (res2) => {
-          let raw = '';
-          res2.on('data', chunk => { raw += chunk; });
-          res2.on('end', () => resolve(raw));
+          const chunks = [];
+          res2.on('data', chunk => { chunks.push(chunk); });
+          res2.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
         }).on('error', () => resolve(''));
         return;
       }
-      let raw = '';
-      res.on('data', chunk => { raw += chunk; });
-      res.on('end', () => resolve(raw));
+      const chunks = [];
+      res.on('data', chunk => { chunks.push(chunk); });
+      res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
     });
     req.on('error', (e) => { console.error('[ai_accuracy] fetch failed:', e.message); resolve(''); });
     req.on('timeout', () => { req.destroy(); console.error('[ai_accuracy] fetch timeout'); resolve(''); });
