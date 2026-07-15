@@ -12,91 +12,95 @@ module.exports.config = { maxDuration: 60 };
 const METABASE_CSV_URL = 'https://metabase.spyne.ai/public/question/84265073-fe7b-4ee1-81d7-5eb37a7e9b2f.csv';
 
 // ── AI Accuracy data (per enterprise per month) ───────────────────────────────
-// Read once at module load from committed CSV. To swap to a live Metabase URL
-// later, replace this block with a fetch (see fetchMetabaseCSV for reference).
-const AI_ACCURACY_CSV_PATH = path.join(__dirname, '..', 'data', 'ai_accuracy.csv');
-// AI_ACCURACY_CSV_URL = 'https://metabase.spyne.ai/public/question/<id>.csv';
-// If you get a public link, comment out the block below and use fetchCSVFromUrl instead.
+// Fetched live from a public Metabase question CSV — no committed file needed.
+const AI_ACCURACY_CSV_URL = 'https://metabase.spyne.ai/public/question/b701c738-0db5-409e-9edc-0aa2ba682fc6.csv';
 
-let _aiAccuracyIndex = null;   // { 'entId|month': { trueAccuracy, postQcToolAccuracy, totalImages, ... } }
-let _aiAccuracyByEnt = null;   // { entId: [{ month, trueAccuracy, ... }, ...] } — for date-range aggregation
-
-function loadAiAccuracy() {
-  if (_aiAccuracyIndex) return { byKey: _aiAccuracyIndex, byEnt: _aiAccuracyByEnt };
+function parseAiAccuracyCSV(raw) {
   const byKey = {};
   const byEnt = {};
-  try {
-    const raw = fs.readFileSync(AI_ACCURACY_CSV_PATH, 'utf8');
-    const lines = raw.trim().split('\n');
-    if (lines.length < 2) return { byKey, byEnt };
-    const headers = parseLine(lines[0]).map(h => h.trim().toLowerCase());
-    const iMonth       = headers.indexOf('month');
-    const iEntId       = headers.indexOf('enterprise_id');
-    const iTotalImages = headers.indexOf('total images');
-    const iQcedImages  = headers.indexOf('qced_images');
-    const iIncorrect   = headers.indexOf('incorrect_images');
-    const iTrueAcc     = headers.indexOf('true_accuracy');
-    const iToolAcc     = headers.indexOf('post_qc_tool_accuracy');
-    if (iMonth < 0 || iEntId < 0 || iTrueAcc < 0) {
-      console.error('[ai_accuracy] required columns missing');
-      return { byKey, byEnt };
-    }
-    lines.slice(1).forEach(line => {
-      if (!line.trim()) return;
-      const cols = parseLine(line);
-      const month = (cols[iMonth] || '').trim();
-      const entId = (cols[iEntId] || '').trim().toLowerCase();
-      if (!month || !entId) return;
-      const parsePct = (s) => {
-        const n = parseFloat(String(s || '').replace(/[^\d.]/g, ''));
-        return isFinite(n) ? +n.toFixed(2) : 0;
-      };
-      const parseNum = (s) => {
-        const n = parseFloat(String(s || '').replace(/,/g, ''));
-        return isFinite(n) ? n : 0;
-      };
-      const entry = {
-        month,
-        trueAccuracy:       parsePct(cols[iTrueAcc]),
-        postQcToolAccuracy: iToolAcc     >= 0 ? parsePct(cols[iToolAcc])     : 0,
-        totalImages:        iTotalImages >= 0 ? parseNum(cols[iTotalImages]) : 0,
-        qcedImages:         iQcedImages  >= 0 ? parseNum(cols[iQcedImages])  : 0,
-        incorrectImages:    iIncorrect   >= 0 ? parseNum(cols[iIncorrect])   : 0,
-      };
-      byKey[entId + '|' + month] = entry;
-      if (!byEnt[entId]) byEnt[entId] = [];
-      byEnt[entId].push(entry);
-    });
-  } catch (e) {
-    console.error('[ai_accuracy] load failed:', e.message);
+  const lines = raw.trim().split('\n');
+  if (lines.length < 2) return { byKey, byEnt };
+  const headers = parseLine(lines[0]).map(h => h.trim().toLowerCase());
+  const iMonth       = headers.indexOf('month');
+  const iEntId       = headers.indexOf('enterprise_id');
+  const iTotalImages = headers.indexOf('total images');
+  const iQcedImages  = headers.indexOf('qced_images');
+  const iIncorrect   = headers.indexOf('incorrect_images');
+  const iTrueAcc     = headers.indexOf('true_accuracy');
+  const iToolAcc     = headers.indexOf('post_qc_tool_accuracy');
+  if (iMonth < 0 || iEntId < 0 || iTrueAcc < 0) {
+    console.error('[ai_accuracy] required columns missing');
+    return { byKey, byEnt };
   }
-  _aiAccuracyIndex = byKey;
-  _aiAccuracyByEnt = byEnt;
+  lines.slice(1).forEach(line => {
+    if (!line.trim()) return;
+    const cols = parseLine(line);
+    const month = (cols[iMonth] || '').trim();
+    const entId = (cols[iEntId] || '').trim().toLowerCase();
+    if (!month || !entId) return;
+    const parsePct = (s) => {
+      const n = parseFloat(String(s || '').replace(/[^\d.]/g, ''));
+      return isFinite(n) ? +n.toFixed(2) : 0;
+    };
+    const parseNum = (s) => {
+      const n = parseFloat(String(s || '').replace(/,/g, ''));
+      return isFinite(n) ? n : 0;
+    };
+    const entry = {
+      month,
+      trueAccuracy:       parsePct(cols[iTrueAcc]),
+      postQcToolAccuracy: iToolAcc     >= 0 ? parsePct(cols[iToolAcc])     : 0,
+      totalImages:        iTotalImages >= 0 ? parseNum(cols[iTotalImages]) : 0,
+      qcedImages:         iQcedImages  >= 0 ? parseNum(cols[iQcedImages])  : 0,
+      incorrectImages:    iIncorrect   >= 0 ? parseNum(cols[iIncorrect])   : 0,
+    };
+    byKey[entId + '|' + month] = entry;
+    if (!byEnt[entId]) byEnt[entId] = [];
+    byEnt[entId].push(entry);
+  });
   return { byKey, byEnt };
 }
 
-// ── Fetch & parse Metabase enterprise CSV ─────────────────────────────────────
-function fetchMetabaseCSV() {
+// Generic public-Metabase-CSV fetcher (follows one redirect, has a timeout).
+function fetchCSVFromUrl(url, timeoutMs) {
   return new Promise((resolve) => {
-    const req = https.get(METABASE_CSV_URL, {
-      timeout: 4000,
+    const req = https.get(url, {
+      timeout: timeoutMs,
       headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'text/csv,*/*' }
     }, (res) => {
       if (res.statusCode === 301 || res.statusCode === 302) {
-        https.get(res.headers.location, { timeout: 4000 }, (res2) => {
+        https.get(res.headers.location, { timeout: timeoutMs }, (res2) => {
           let raw = '';
           res2.on('data', chunk => { raw += chunk; });
-          res2.on('end', () => { try { resolve(parseEnterpriseMeta(raw)); } catch(e) { resolve({}); } });
-        }).on('error', () => resolve({}));
+          res2.on('end', () => resolve(raw));
+        }).on('error', () => resolve(''));
         return;
       }
       let raw = '';
       res.on('data', chunk => { raw += chunk; });
-      res.on('end', () => { try { resolve(parseEnterpriseMeta(raw)); } catch(e) { resolve({}); } });
+      res.on('end', () => resolve(raw));
     });
-    req.on('error', () => resolve({}));
-    req.on('timeout', () => { req.destroy(); console.error('[metabase] timeout'); resolve({}); });
+    req.on('error', (e) => { console.error('[ai_accuracy] fetch failed:', e.message); resolve(''); });
+    req.on('timeout', () => { req.destroy(); console.error('[ai_accuracy] fetch timeout'); resolve(''); });
   });
+}
+
+async function fetchAiAccuracy() {
+  const raw = await fetchCSVFromUrl(AI_ACCURACY_CSV_URL, 5000);
+  if (!raw) return { byKey: {}, byEnt: {} };
+  try {
+    return parseAiAccuracyCSV(raw);
+  } catch (e) {
+    console.error('[ai_accuracy] parse failed:', e.message);
+    return { byKey: {}, byEnt: {} };
+  }
+}
+
+// ── Fetch & parse Metabase enterprise CSV ─────────────────────────────────────
+async function fetchMetabaseCSV() {
+  const raw = await fetchCSVFromUrl(METABASE_CSV_URL, 4000);
+  if (!raw) return {};
+  try { return parseEnterpriseMeta(raw); } catch (e) { return {}; }
 }
 
 function parseLine(line) {
@@ -906,11 +910,13 @@ module.exports = async function handler(req, res) {
 
     // Metabase: run in parallel with active sheet fetches (already done above)
     const metaDeadline  = new Promise(resolve => setTimeout(() => resolve({}), 5000));
-    const enterpriseMeta = await Promise.race([fetchMetabaseCSV(), metaDeadline]);
+    const aiAccDeadline = new Promise(resolve => setTimeout(() => resolve({ byKey: {}, byEnt: {} }), 5000));
+    const [enterpriseMeta, { byKey: aiAccuracyIndex }] = await Promise.all([
+      Promise.race([fetchMetabaseCSV(), metaDeadline]),
+      Promise.race([fetchAiAccuracy(), aiAccDeadline]),
+    ]);
 
     const metaIndex = buildMetaIndex(enterpriseMeta);
-    // AI accuracy: load once from committed CSV (fast, from disk)
-    const { byKey: aiAccuracyIndex } = loadAiAccuracy();
     const sheetsResults = await Promise.allSettled(
       rawSheetsData.map(({ cfg, outputRows, factorRows, removedRows }) =>
         Promise.resolve(computeMonth(cfg, outputRows, factorRows, removedRows, metaIndex, aiAccuracyIndex))
